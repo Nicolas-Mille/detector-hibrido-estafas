@@ -44,3 +44,44 @@ def test_normaliza_quitando_query_de_tracking():
 def test_normaliza_quitando_barra_final():
     result = detect_platform("https://www.mercadolibre.com.ar/iphone-15/p/MLA123/")
     assert not result.normalized_url.endswith("MLA123/")
+
+
+def test_detecta_mercadolibre_meli_la():
+    result = detect_platform("https://meli.la/1234567")
+    assert result.platform == "mercadolibre"
+
+
+# --- Regresión SSRF: dominios "parecidos" no deben clasificarse como mercadolibre ---
+
+
+def test_rechaza_dominio_disfrazado_como_subdominio_de_atacante():
+    result = detect_platform("https://mercadolibre.com.atacante.io/x")
+    assert result.platform == "unsupported"
+
+
+def test_rechaza_dominio_falso_con_userinfo_estilo_email():
+    result = detect_platform("https://mercadolibre.com@atacante.io/x")
+    assert result.platform == "unsupported"
+
+
+def test_rechaza_host_que_contiene_meli_la_como_substring():
+    result = detect_platform("https://somemeli.latency.io/x")
+    assert result.platform == "unsupported"
+
+
+def test_no_arrastra_credenciales_a_la_url_normalizada():
+    result = detect_platform("https://user:pass@articulo.mercadolibre.com.ar/MLA-1")
+    assert result.platform == "mercadolibre"
+    assert "user" not in result.normalized_url
+    assert "pass" not in result.normalized_url
+    assert "@" not in result.normalized_url
+
+
+def test_facebook_sigue_funcionando_con_subdominios_reales():
+    result = detect_platform("https://m.facebook.com/marketplace/item/555")
+    assert result.platform == "facebook_marketplace"
+
+
+def test_rechaza_dominio_facebook_disfrazado():
+    result = detect_platform("https://facebook.com.atacante.io/marketplace/item/1")
+    assert result.platform == "unsupported"

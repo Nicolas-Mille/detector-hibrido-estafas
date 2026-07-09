@@ -2,12 +2,27 @@
 
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 Platform = Literal["mercadolibre", "facebook_marketplace", "unsupported"]
 
-_MERCADOLIBRE_HOST_FRAGMENTS = ("mercadolibre.com", "mercadolivre.com", "meli.la")
-_FACEBOOK_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com"}
+# Allow-list de dominios reales, comparados por igualdad o por sufijo de
+# subdominio (nunca por substring crudo). Un substring check dejaría pasar
+# hosts como "mercadolibre.com.atacante.io" como si fueran MercadoLibre
+# legítimo, habilitando SSRF: el backend haría requests salientes a
+# cualquier host que un atacante nombre parecido.
+_MERCADOLIBRE_ALLOWED_DOMAINS = (
+    "mercadolibre.com",
+    "mercadolibre.com.ar",
+    "mercadolibre.com.mx",
+    "mercadolibre.com.co",
+    "mercadolibre.com.uy",
+    "mercadolibre.com.pe",
+    "mercadolibre.cl",
+    "mercadolivre.com.br",
+    "meli.la",
+)
+_FACEBOOK_ALLOWED_DOMAINS = ("facebook.com",)
 _TRACKING_PARAM_PREFIXES = ("utm_", "matt_", "ref", "forceInApp", "click_id", "position")
 
 
@@ -33,37 +48,47 @@ def detect_platform(raw_url: str) -> PlatformDetection:
     parseable = original if "://" in original else f"https://{original}"
     try:
         parts = urlsplit(parseable)
+        # `.hostname` descarta userinfo ("user:pass@") y puerto; nunca hay
+        # que confiar en `netloc` crudo para decidir el host real.
+        host = (parts.hostname or "").lower()
+        port = parts.port
     except ValueError:
         return PlatformDetection(
             platform="unsupported", original_url=original, normalized_url=original
         )
 
-    host = parts.netloc.lower().split(":")[0]
-    if host.startswith("www."):
-        host = host[4:]
-
     platform = _resolve_platform(host, parts.path)
-    normalized = _normalize(parts) if platform != "unsupported" else original
+    normalized = _normalize(parts, host, port) if platform != "unsupported" else original
     return PlatformDetection(platform=platform, original_url=original, normalized_url=normalized)
+
+
+def _is_domain_or_subdomain(host: str, allowed_domain: str) -> bool:
+    """True si host es exactamente allowed_domain o un subdominio real suyo."""
+    return host == allowed_domain or host.endswith(f".{allowed_domain}")
 
 
 def _resolve_platform(host: str, path: str) -> Platform:
     if not host:
         return "unsupported"
-    if any(fragment in host for fragment in _MERCADOLIBRE_HOST_FRAGMENTS):
+    if any(_is_domain_or_subdomain(host, domain) for domain in _MERCADOLIBRE_ALLOWED_DOMAINS):
         return "mercadolibre"
-    if host in _FACEBOOK_HOSTS and path.startswith("/marketplace"):
+    if any(
+        _is_domain_or_subdomain(host, domain) for domain in _FACEBOOK_ALLOWED_DOMAINS
+    ) and path.startswith("/marketplace"):
         return "facebook_marketplace"
     return "unsupported"
 
 
-def _normalize(parts) -> str:
+def _normalize(parts: SplitResult, host: str, port: int | None) -> str:
     query_pairs = [
         (key, value)
         for key, value in parse_qsl(parts.query, keep_blank_values=False)
         if not key.startswith(_TRACKING_PARAM_PREFIXES)
     ]
     scheme = parts.scheme or "https"
-    netloc = parts.netloc.lower()
+    # Se reconstruye el netloc desde host+port (nunca desde parts.netloc
+    # crudo) para no arrastrar credenciales tipo "user:pass@" al guardar
+    # o reutilizar la URL normalizada.
+    netloc = f"{host}:{port}" if port else host
     path = parts.path.rstrip("/") or "/"
     return urlunsplit((scheme, netloc, path, urlencode(query_pairs), ""))

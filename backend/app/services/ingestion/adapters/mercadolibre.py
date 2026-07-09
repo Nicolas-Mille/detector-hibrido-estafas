@@ -30,7 +30,17 @@ _DEFAULT_HEADERS = {
 
 
 def _default_http_get(url: str) -> httpx.Response:
-    with httpx.Client(timeout=10, follow_redirects=True, headers=_DEFAULT_HEADERS) as client:
+    # follow_redirects=True es necesario: links de MercadoLibre compartidos
+    # (sec/, listado -> articulo, etc.) redirigen legítimamente antes de
+    # llegar a la publicación. El riesgo de SSRF vía redirect ya está
+    # acotado en el origen: `url` llega acá solo si `detect_platform` la
+    # clasificó contra el allow-list de dominios de MercadoLibre, así que
+    # el primer salto siempre es a un dominio real de MercadoLibre, no a
+    # uno elegido por el atacante. max_redirects limita la profundidad de
+    # la cadena como defensa en profundidad.
+    with httpx.Client(
+        timeout=10, follow_redirects=True, max_redirects=5, headers=_DEFAULT_HEADERS
+    ) as client:
         return client.get(url)
 
 

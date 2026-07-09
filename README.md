@@ -68,10 +68,15 @@ Con una URL no soportada:
 
 El `id` que devuelve `ListingSnapshotRead` es el hash SHA-256 de la URL normalizada (`url_hash`), la misma clave primaria pensada desde la Fase 0 para la caché de 7 días. `POST /api/ingest` hace *upsert*: reingestar la misma publicación actualiza la fila existente en vez de crear una nueva.
 
+### Seguridad de la ingesta
+
+`POST /api/ingest` recibe una URL de cualquier origen sin autenticación, así que `detect_platform` valida el host contra un **allow-list explícito de dominios de MercadoLibre y Facebook** (`_MERCADOLIBRE_ALLOWED_DOMAINS` / `_FACEBOOK_ALLOWED_DOMAINS` en `url_detector.py`), comparando por igualdad exacta o por sufijo real de subdominio — nunca por substring crudo. Un check por substring dejaría pasar hosts como `mercadolibre.com.atacante.io` como si fueran MercadoLibre legítimo, y el backend terminaría haciendo requests salientes a cualquier host que un atacante nombre parecido (SSRF). El host se extrae con `urlsplit(...).hostname`, que descarta userinfo (`usuario:password@host`) y puerto, para no confiar en el `netloc` crudo de la URL.
+
 ### Limitaciones actuales
 
 - No hay ningún cálculo de riesgo de estafa todavía.
 - La extracción de MercadoLibre depende de selectores públicos que MercadoLibre puede cambiar sin aviso; los campos no encontrados quedan `null` con un warning, nunca rompen la request.
+- **MercadoLibre puede bloquear el scraping con una página de verificación/challenge anti-bot** (observado en testing manual) en vez de servir la publicación. En ese caso la respuesta sigue siendo `status: success`, pero con todos los campos extraíbles en `null` y warnings explicando qué faltó — el endpoint nunca rompe, aunque hoy no hay una señal separada que distinga "MercadoLibre bloqueó el request" de "la publicación genuinamente no tiene ese dato".
 - Facebook Marketplace usa fixtures fijos, no hay scraping real.
 - No hay caché con TTL activo todavía (el upsert existe, pero la lógica de "hit de caché sin re-scrapear" es de una fase posterior).
 
